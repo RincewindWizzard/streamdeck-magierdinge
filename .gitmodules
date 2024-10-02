@@ -1,0 +1,3 @@
+[submodule "streamdeck_magierdinge/material-icons"]
+	path = streamdeck_magierdinge/material-icons
+	url = git@github.com:material-icons/material-icons.git
