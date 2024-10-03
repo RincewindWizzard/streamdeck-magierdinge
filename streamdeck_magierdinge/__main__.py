@@ -1,69 +1,92 @@
 import threading
+from typing import Callable
 
+import homeassistant_api
 from StreamDeck.DeviceManager import DeviceManager
+from StreamDeck.Devices.StreamDeck import StreamDeck
 from StreamDeck.ImageHelpers import PILHelper
+from colour import Color
 
 from icon_loader import load_icon
-from ux_ui import LightSwitch
+from ux_ui import LightSwitch, Button, State
 from loguru import logger
-
-ICON_NAMES = [
-    'local_florist',
-    'lens',
-    'kitesurfing',
-    'iron',
-    'headset',
-    'tapas'
-]
-
-BUTTONS = [
-    LightSwitch()
-]
+from config import load_config
 
 
-def on_key_pressed(deck, key, state):
-    logger.debug(f'{deck}, {key}, {state}')
-    if key < len(BUTTONS):
-        BUTTONS[key].on_pressed(deck, key, state)
+def shutdown_join(fun: Callable[[], None]):
+    def join_all():
+        # Wait until all application threads have terminated (for this example,
+        # this is when all deck handles are closed).
+        for t in threading.enumerate():
+            try:
+                t.join()
+            except RuntimeError:
+                pass
+
+    def closure():
+        fun()
+        join_all()
+
+    return closure()
 
 
-def shutdown_join():
-    # Wait until all application threads have terminated (for this example,
-    # this is when all deck handles are closed).
-    for t in threading.enumerate():
-        try:
-            t.join()
-        except RuntimeError:
-            pass
+def setup_streamdeck(deck: StreamDeck, buttons: list[Button]):
+    if not deck.is_visual():
+        raise ValueError('Streamdeck has no displays!')
+
+    deck.open()
+    deck.reset()
+
+    logger.debug("Opened '{}' device (serial number: '{}', fw: '{}')".format(
+        deck.deck_type(), deck.get_serial_number(), deck.get_firmware_version()
+    ))
+
+    deck.set_brightness(100)
+
+    for key in range(min(len(buttons), deck.key_count())):
+        with deck:
+            button = buttons[key]
+            deck.set_key_image(key, PILHelper.to_native_key_format(deck, button.draw_image()))
+
+    def on_key_pressed(deck, key, state):
+        logger.debug(f'{deck}, {key}, {state}')
+        if key < len(buttons):
+            buttons[key].on_pressed(deck, key, state)
+
+    deck.set_key_callback(on_key_pressed)
 
 
+@shutdown_join
 def main():
-    streamdecks = DeviceManager().enumerate()
+    config = load_config()
 
-    print("Found {} Stream Deck(s).\n".format(len(streamdecks)))
+    with homeassistant_api.Client(
+            f'{config.home_assistant.url}/api',
+            config.home_assistant.token
+    ) as client:
+        light = client.get_domain("light")
 
-    for index, deck in enumerate(streamdecks):
-        if not deck.is_visual():
-            continue
+        def turn_light(btn: LightSwitch):
+            logger.debug(f'Color: {btn.primary_color.rgb}')
 
-        deck.open()
-        deck.reset()
+            light.turn_on(
+                entity_id="light.videoleuchte_licht",
+                rgb_color=[int(x * 255) for x in btn.primary_color.rgb],
+                brightness=255 if btn.state == State.ON else 0)
 
-        print("Opened '{}' device (serial number: '{}', fw: '{}')".format(
-            deck.deck_type(), deck.get_serial_number(), deck.get_firmware_version()
-        ))
+        buttons = [
+            LightSwitch(color=Color('red'), on_pressed=turn_light),
+            LightSwitch(color=Color('green'), on_pressed=turn_light),
+            LightSwitch(color=Color('blue'), on_pressed=turn_light),
+            LightSwitch(color=Color('white'), on_pressed=turn_light),
+            LightSwitch(color=Color('yellow'), on_pressed=turn_light),
+        ]
 
-        # Set initial screen brightness to 30%.
-        deck.set_brightness(30)
-
-        for key in range(min(len(BUTTONS), deck.key_count())):
-            with deck:
-                button = BUTTONS[key]
-                deck.set_key_image(key, PILHelper.to_native_key_format(deck, button.draw_image()))
-
-        deck.set_key_callback(on_key_pressed)
-
-    shutdown_join()
+        streamdecks = DeviceManager().enumerate()
+        logger.debug("Found {} Stream Deck(s).\n".format(len(streamdecks)))
+        for index, deck in enumerate(streamdecks):
+            if deck.is_visual():
+                setup_streamdeck(deck, buttons=buttons)
 
 
 if __name__ == '__main__':

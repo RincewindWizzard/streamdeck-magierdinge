@@ -84,8 +84,10 @@ class State(Enum):
 
 
 class LightSwitch(Button):
-    def __init__(self, color: Color = Color('red')):
+    def __init__(self, color: Color = Color('red'), on_pressed: Callable[[Button], None] = lambda _: None):
         super().__init__()
+        self.primary_color = color
+        self.on_pressed_cb = on_pressed
         self._icon_lightbulb = load_svg_icon('lightbulb')
         self._icon_light_off = load_svg_icon('link_off')
         self.state = State.OFF
@@ -126,3 +128,5 @@ class LightSwitch(Button):
         deck.set_key_image(
             key,
             PILHelper.to_native_key_format(deck, self.draw_image()))
+
+        self.on_pressed_cb(self)
