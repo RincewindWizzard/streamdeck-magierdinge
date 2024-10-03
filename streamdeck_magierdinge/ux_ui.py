@@ -1,7 +1,12 @@
+import io
 from importlib.resources import files
+from typing import TypeVar, Callable, Any
 
 import cairosvg
 from PIL.ImageFile import ImageFile
+from PIL import Image
+from StreamDeck.ImageHelpers import PILHelper
+
 from icon_loader import load_icon
 from colour import Color
 from xml.etree import ElementTree as ET
@@ -32,16 +37,34 @@ def style_svg(tree: ET.ElementTree, style: str) -> ET.ElementTree:
 def style_with(stroke: Color, background: Color, fill: Color):
     return f"""
         svg {{ 
-            background-color: {background}; 
+            background-color: {background.get_web()}; 
         }}
         line, path, rect, circle, polygon, polyline, ellipse {{
-            stroke: {stroke.hex}; 
+            stroke: {stroke.get_web()}; 
             fill: none;      
         }}
         rect, circle, polygon, polyline, ellipse {{
-            fill: {fill.hex};   
+            fill: {fill.get_web()};   
         }}
         """
+
+
+def render_svg(fun: Callable[[Any], ET.Element]) -> Callable[[Any], ImageFile]:
+    def svg_to_image(svg: ET) -> ImageFile:
+        # TODO: Namespaces korrekt entfernen
+        svg_str = ET.tostring(svg.getroot(), encoding='unicode').replace('ns0:', '').replace(':ns0', '')
+        logger.trace(svg_str)
+
+        png_data = cairosvg.svg2png(
+            bytestring=svg_str,
+            output_width=ICON_DIMENSION,
+            output_height=ICON_DIMENSION)
+
+        image = Image.open(io.BytesIO(png_data)).convert("RGB")
+        image = image.resize((ICON_DIMENSION, ICON_DIMENSION))
+        return image
+
+    return lambda self: svg_to_image(fun(self))
 
 
 class Button(object):
@@ -51,7 +74,7 @@ class Button(object):
     def draw_image(self) -> ImageFile:
         ...
 
-    def on_pressed(self):
+    def on_pressed(self, deck, key, state):
         ...
 
 
@@ -60,10 +83,11 @@ class State(Enum):
     OFF = 2
 
 
-class LightSwitch(object):
+class LightSwitch(Button):
     def __init__(self, color: Color = Color('red')):
+        super().__init__()
         self._icon_lightbulb = load_svg_icon('lightbulb')
-        self._icon_light_off = load_svg_icon('light_off')
+        self._icon_light_off = load_svg_icon('link_off')
         self.state = State.OFF
 
         self.icons = {
@@ -84,18 +108,21 @@ class LightSwitch(object):
 
         ...
 
-    def draw_image(self) -> ImageFile:
+    @render_svg
+    def draw_image(self) -> ET:
         svg = self.icons[self.state]
 
-        return cairosvg.svg2png(
-            bytestring=svg,
-            output_width=ICON_DIMENSION,
-            output_height=ICON_DIMENSION)
+        return svg
 
-    def on_pressed(self):
+    def on_pressed(self, deck, key, state):
         logger.debug('Light Switch pressed')
 
-        if self.state == State.ON:
-            self.state = State.OFF
-        elif self.state == State.OFF:
-            self.state = State.ON
+        if state:
+            if self.state == State.ON:
+                self.state = State.OFF
+            elif self.state == State.OFF:
+                self.state = State.ON
+
+        deck.set_key_image(
+            key,
+            PILHelper.to_native_key_format(deck, self.draw_image()))
